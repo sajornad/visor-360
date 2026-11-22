@@ -120,8 +120,11 @@ function Main() {
         <Text style={styles.subtitle}>Imágenes y videos equirrectangulares (2:1)</Text>
 
         <Text style={styles.section}>Abrir</Text>
-        <Btn label="Elegir de Fotos" onPress={pickPhotos} />
-        <Btn label="Elegir de Archivos" onPress={pickFiles} />
+        <Btn
+          label="Abrir foto o video 360"
+          primary
+          onPress={() => setViewer({ page: buildViewerPage({ src: null, type: 'image', audioSrc: null }), key: Date.now() })}
+        />
         <View style={styles.urlRow}>
           <TextInput
             style={styles.input}

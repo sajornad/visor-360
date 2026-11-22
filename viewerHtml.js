@@ -104,7 +104,7 @@ function setTexture(tex) {
 }
 
 // ---------- Carga del medio ----------
-const isRemote = /^https?:/i.test(CFG.src);
+const isRemote = () => /^https?:/i.test(CFG.src || '');
 let video = null, audio = null, seeking = false;
 
 function fmtTime(s) {
@@ -114,6 +114,7 @@ function fmtTime(s) {
   return m + ':' + (r < 10 ? '0' : '') + r;
 }
 
+function loadMedia() {
 if (CFG.type === 'video') {
   $('seekRow').classList.remove('hidden');
   muteBtn.classList.remove('hidden');
@@ -124,7 +125,7 @@ if (CFG.type === 'video') {
   video.playsInline = true;
   video.loop = true;
   video.preload = 'auto';
-  if (isRemote) video.crossOrigin = 'anonymous';
+  if (isRemote()) video.crossOrigin = 'anonymous';
   video.src = CFG.src;
 
   if (CFG.audioSrc) {
@@ -179,10 +180,11 @@ if (CFG.type === 'video') {
   video.load();
 } else {
   const img = new Image();
-  if (isRemote) img.crossOrigin = 'anonymous';
+  if (isRemote()) img.crossOrigin = 'anonymous';
   img.onload = () => { const t = new THREE.Texture(img); t.needsUpdate = true; setTexture(t); say(''); };
-  img.onerror = () => say('No se pudo abrir la imagen.' + (isRemote ? ' El servidor debe permitir CORS.' : ''));
+  img.onerror = () => say('No se pudo abrir la imagen.' + (isRemote() ? ' El servidor debe permitir CORS.' : ''));
   img.src = CFG.src;
+}
 }
 
 function updateTime() {
@@ -291,6 +293,32 @@ renderer.setAnimationLoop(() => {
   }
   renderer.render(scene, camera);
 });
+// ---------- Selector de archivo dentro del visor ----------
+// iOS no deja al WebView leer fotos de la app, así que el archivo se elige aquí.
+const picker = document.createElement('div');
+picker.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;box-sizing:border-box;text-align:center';
+const btnCss = 'display:block;width:100%;max-width:320px;box-sizing:border-box;padding:16px;border-radius:14px;font-size:17px;font-weight:600;overflow-wrap:anywhere;';
+picker.innerHTML =
+  '<label style="' + btnCss + 'background:#fff;color:#000">Elegir foto o video 360<input id="fi" type="file" accept="image/*,video/*" style="display:none"></label>' +
+  '<label style="' + btnCss + 'background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35)">Audio aparte (opcional)<input id="fa" type="file" accept="audio/*" style="display:none"></label>' +
+  '<div id="an" style="font-size:14px;color:#aaa;max-width:320px;overflow-wrap:anywhere"></div>';
+document.body.appendChild(picker);
+let pickedAudio = null;
+$('fa').onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (f) { pickedAudio = URL.createObjectURL(f); $('an').textContent = 'Audio: ' + f.name; }
+};
+$('fi').onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  CFG.src = URL.createObjectURL(f);
+  CFG.type = /^video/.test(f.type) || /\.(mp4|mov|m4v|webm)$/i.test(f.name) ? 'video' : 'image';
+  CFG.audioSrc = CFG.type === 'video' ? pickedAudio : null;
+  picker.remove();
+  say('Cargando…');
+  loadMedia();
+};
+if (CFG.src) { picker.remove(); loadMedia(); } else { say(''); }
 </script>
 </body>
 </html>`;
