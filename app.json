@@ -1,0 +1,17 @@
+{
+  "expo": {
+    "name": "Visor 360",
+    "slug": "visor-360",
+    "version": "1.0.0",
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSMotionUsageDescription": "Visor 360 usa el giroscopio para mover la vista con el teléfono.",
+        "NSPhotoLibraryUsageDescription": "Visor 360 abre tus fotos y videos 360."
+      }
+    },
+    "android": {}
+  }
+}
