@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Visor 360</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden; touch-action: none;
+    font-family: -apple-system, Roboto, sans-serif; color: #fff; -webkit-user-select: none; user-select: none; }
+  canvas { display: block; }
+  #msg { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    text-align: center; padding: 32px; box-sizing: border-box; font-size: 15px; line-height: 1.4;
+    pointer-events: none; overflow-wrap: anywhere; }
+  #bar { position: fixed; left: 0; right: 0; bottom: 0; box-sizing: border-box;
+    padding: 24px 12px calc(12px + env(safe-area-inset-bottom));
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: linear-gradient(transparent, rgba(0,0,0,.75)); }
+  button { background: rgba(255,255,255,.15); color: #fff; border: 1px solid rgba(255,255,255,.35);
+    border-radius: 18px; padding: 8px 12px; font-size: 14px; white-space: nowrap; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; }
+  button.on { background: #fff; color: #000; }
+  #seekRow { display: flex; align-items: center; gap: 8px; flex: 1 1 100%; min-width: 0; }
+  #seek { flex: 1 1 auto; min-width: 0; }
+  #time { font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div id="msg">Cargando…</div>
+<div style="position:fixed;top:calc(12px + env(safe-area-inset-top));left:0;right:0;text-align:center;font-weight:700;font-size:17px;pointer-events:none">Visor 360</div>
+<div id="bar">
+  <div id="seekRow" class="hidden">
+    <button id="play">▶</button>
+    <input id="seek" type="range" min="0" max="1000" value="0">
+    <span id="time">0:00 / 0:00</span>
+  </div>
+  <button id="mute" class="hidden">Sonido: sí</button>
+  <button id="gyro">Giroscopio</button>
+  <button id="fmt">Formato: Mono</button>
+  <button id="reset">Centrar</button>
+</div>
+<script>window.__CFG = {"src":null,"type":"image","audioSrc":null};</script>
+<script type="module">
+import * as THREE from 'https://unpkg.com/three@0.170.0/build/three.module.js';
+
+const CFG = window.__CFG;
+const $ = (id) => document.getElementById(id);
+const msg = $('msg'), bar = $('bar'), playBtn = $('play'), seek = $('seek'), timeEl = $('time');
+const muteBtn = $('mute'), gyroBtn = $('gyro'), fmtBtn = $('fmt'), resetBtn = $('reset');
+
+function say(t) { msg.textContent = t || ''; msg.style.display = t ? 'flex' : 'none'; }
+// En Safari el giroscopio viene del navegador (pide permiso en iOS).
+function onOrient(e) { if (e.alpha == null) return; const d = Math.PI / 180; window.__motion(e.alpha * d, e.beta * d, e.gamma * d); }
+async function post(m) {
+  if (m === 'gyro:on') {
+    try {
+      if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+        const r = await DeviceOrientationEvent.requestPermission();
+        if (r !== 'granted') throw new Error('sin permiso');
+      }
+      window.addEventListener('deviceorientation', onOrient);
+    } catch (err) {
+      window.__gyroOff();
+      say('No se pudo activar el giroscopio en este navegador.');
+      setTimeout(() => say(''), 2500);
+    }
+  } else if (m === 'gyro:off') {
+    window.removeEventListener('deviceorientation', onOrient);
+  }
+}
+const clamp = THREE.MathUtils.clamp;
+
+// ---------- Escena ----------
+const renderer = new THREE.WebGLRenderer({ antialias: false });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1100);
+const geo = new THREE.SphereGeometry(500, 64, 32);
+geo.scale(-1, 1, 1); // ver la esfera por dentro
+const mat = new THREE.MeshBasicMaterial();
+const sphere = new THREE.Mesh(geo, mat);
+sphere.rotation.y = -Math.PI / 2; // el centro de la imagen queda al frente
+sphere.visible = false;
+scene.add(sphere);
+
+window.addEventListener('resize', () => {
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+// ---------- Formatos (mono / estéreo) ----------
+const FORMATS = [
+  { label: 'Mono',         r: [1, 1],   o: [0, 0] },
+  { label: 'Arriba/abajo', r: [1, 0.5], o: [0, 0.5] }, // ojo izquierdo arriba
+  { label: 'Lado a lado',  r: [0.5, 1], o: [0, 0] },   // ojo izquierdo a la izquierda
+];
+let fmtIdx = 0;
+function applyFormat() {
+  const f = FORMATS[fmtIdx];
+  if (mat.map) { mat.map.repeat.set(f.r[0], f.r[1]); mat.map.offset.set(f.o[0], f.o[1]); }
+  fmtBtn.textContent = 'Formato: ' + f.label;
+}
+fmtBtn.onclick = () => { fmtIdx = (fmtIdx + 1) % FORMATS.length; applyFormat(); };
+
+function setTexture(tex) {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.minFilter = THREE.LinearFilter;
+  tex.generateMipmaps = false;
+  mat.map = tex;
+  mat.needsUpdate = true;
+  sphere.visible = true;
+  applyFormat();
+}
+
+// ---------- Carga del medio ----------
+const isRemote = () => /^https?:/i.test(CFG.src || '');
+let video = null, audio = null, seeking = false;
+
+function fmtTime(s) {
+  if (!isFinite(s) || s < 0) s = 0;
+  s = Math.floor(s);
+  const m = Math.floor(s / 60), r = s % 60;
+  return m + ':' + (r < 10 ? '0' : '') + r;
+}
+
+function loadMedia() {
+if (CFG.type === 'video') {
+  $('seekRow').classList.remove('hidden');
+  muteBtn.classList.remove('hidden');
+
+  video = document.createElement('video');
+  video.setAttribute('playsinline', '');
+  video.setAttribute('webkit-playsinline', '');
+  video.playsInline = true;
+  video.loop = true;
+  video.preload = 'auto';
+  if (isRemote()) video.crossOrigin = 'anonymous';
+  video.src = CFG.src;
+
+  if (CFG.audioSrc) {
+    audio = new Audio();
+    audio.preload = 'auto';
+    audio.loop = true;
+    audio.src = CFG.audioSrc;
+    video.muted = true; // el sonido sale del WAV aparte
+  }
+
+  say('Toca ▶ para reproducir');
+  let textured = false;
+  const onReady = () => {
+    if (!textured) { setTexture(new THREE.VideoTexture(video)); textured = true; }
+    if (!video.paused || video.currentTime > 0) say('');
+    updateTime();
+  };
+  video.addEventListener('loadeddata', onReady);
+  video.addEventListener('error', () => say(
+    'El teléfono no pudo reproducir este video. Si es 6K en H.265, prueba con una copia en 4K (3840×1920).'));
+  video.addEventListener('timeupdate', updateTime);
+
+  const syncAudio = (force) => {
+    if (!audio) return;
+    if (force || Math.abs(audio.currentTime - video.currentTime) > 0.15) {
+      try { audio.currentTime = video.currentTime; } catch (e) {}
+    }
+  };
+  video.addEventListener('play', () => { playBtn.textContent = '❚❚'; say(''); });
+  video.addEventListener('playing', () => { if (audio) { syncAudio(true); audio.play().catch(() => {}); } });
+  video.addEventListener('pause', () => { playBtn.textContent = '▶'; if (audio) audio.pause(); });
+  video.addEventListener('waiting', () => { if (audio) audio.pause(); });
+  video.addEventListener('seeked', () => syncAudio(true));
+  setInterval(() => { if (audio && !video.paused) syncAudio(false); }, 1000);
+
+  playBtn.onclick = () => {
+    if (video.paused) video.play().catch((e) => say('No se pudo reproducir: ' + e.message));
+    else video.pause();
+  };
+  seek.addEventListener('input', () => {
+    seeking = true;
+    if (video.duration) video.currentTime = (seek.value / 1000) * video.duration;
+  });
+  seek.addEventListener('change', () => { seeking = false; });
+
+  let muted = false;
+  muteBtn.onclick = () => {
+    muted = !muted;
+    if (audio) audio.muted = muted; else video.muted = muted;
+    muteBtn.textContent = 'Sonido: ' + (muted ? 'no' : 'sí');
+  };
+  video.load();
+} else {
+  const img = new Image();
+  if (isRemote()) img.crossOrigin = 'anonymous';
+  img.onload = () => { const t = new THREE.Texture(img); t.needsUpdate = true; setTexture(t); say(''); };
+  img.onerror = () => say('No se pudo abrir la imagen.' + (isRemote() ? ' El servidor debe permitir CORS.' : ''));
+  img.src = CFG.src;
+}
+}
+
+function updateTime() {
+  if (!video) return;
+  const d = video.duration || 0;
+  timeEl.textContent = fmtTime(video.currentTime) + ' / ' + fmtTime(d);
+  if (!seeking && d) seek.value = String(Math.round((video.currentTime / d) * 1000));
+}
+
+// ---------- Mirada: arrastre, pellizco y giroscopio ----------
+let yaw = 0, pitch = 0;
+let gyroOn = false, gyroOffset = 0, needGyroInit = false, motion = null;
+const fwd = new THREE.Vector3();
+const yAxis = new THREE.Vector3(0, 1, 0), zee = new THREE.Vector3(0, 0, 1);
+const euler = new THREE.Euler(), dq = new THREE.Quaternion(), q0 = new THREE.Quaternion(), qYaw = new THREE.Quaternion();
+const q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5)); // la cámara mira por detrás del teléfono
+
+// La app nativa manda la orientación del teléfono (radianes).
+window.__motion = function (a, b, g) { motion = { a: a, b: b, g: g }; };
+window.__gyroOff = function () { setGyro(false, true); };
+
+function screenAngle() {
+  if (screen.orientation && typeof screen.orientation.angle === 'number') return screen.orientation.angle;
+  return window.orientation || 0;
+}
+function deviceQuat(m, out) {
+  euler.set(m.b, m.a, -m.g, 'YXZ');
+  out.setFromEuler(euler);
+  out.multiply(q1);
+  out.multiply(q0.setFromAxisAngle(zee, -THREE.MathUtils.degToRad(screenAngle())));
+  return out;
+}
+function setGyro(on, silent) {
+  if (on === gyroOn) return;
+  gyroOn = on;
+  gyroBtn.classList.toggle('on', on);
+  if (on) { needGyroInit = true; motion = null; if (!silent) post('gyro:on'); }
+  else {
+    camera.getWorldDirection(fwd);
+    yaw = Math.atan2(fwd.x, -fwd.z);
+    pitch = Math.asin(clamp(fwd.y, -1, 1));
+    if (!silent) post('gyro:off');
+  }
+}
+gyroBtn.onclick = () => setGyro(!gyroOn);
+resetBtn.onclick = () => {
+  yaw = 0; pitch = 0; camera.fov = 75; camera.updateProjectionMatrix();
+  if (gyroOn) needGyroInit = true;
+};
+
+const cv = renderer.domElement;
+const pts = new Map();
+let pinch = null, tap = null;
+function pinchDist() {
+  const a = Array.from(pts.values());
+  return Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y);
+}
+cv.addEventListener('pointerdown', (e) => {
+  cv.setPointerCapture(e.pointerId);
+  pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (pts.size === 1) tap = { x: e.clientX, y: e.clientY, t: Date.now() };
+  if (pts.size === 2) { pinch = { d: pinchDist(), fov: camera.fov }; tap = null; }
+});
+cv.addEventListener('pointermove', (e) => {
+  const p = pts.get(e.pointerId);
+  if (!p) return;
+  const dx = e.clientX - p.x, dy = e.clientY - p.y;
+  p.x = e.clientX; p.y = e.clientY;
+  if (pts.size === 2 && pinch) {
+    camera.fov = clamp(pinch.fov * pinch.d / Math.max(pinchDist(), 1), 30, 100);
+    camera.updateProjectionMatrix();
+    return;
+  }
+  if (pts.size === 1) {
+    const k = 0.004 * camera.fov / 75;
+    if (gyroOn) gyroOffset += dx * k;
+    else { yaw -= dx * k; pitch = clamp(pitch + dy * k, -1.48, 1.48); }
+  }
+});
+function endPointer(e) {
+  pts.delete(e.pointerId);
+  if (pts.size < 2) pinch = null;
+  if (tap && pts.size === 0) {
+    const moved = Math.hypot(e.clientX - tap.x, e.clientY - tap.y);
+    if (moved < 8 && Date.now() - tap.t < 300) bar.classList.toggle('hidden');
+    tap = null;
+  }
+}
+cv.addEventListener('pointerup', endPointer);
+cv.addEventListener('pointercancel', endPointer);
+
+renderer.setAnimationLoop(() => {
+  if (gyroOn) {
+    if (motion) {
+      deviceQuat(motion, dq);
+      if (needGyroInit) {
+        fwd.set(0, 0, -1).applyQuaternion(dq);
+        gyroOffset = Math.atan2(fwd.x, -fwd.z) - yaw; // mantener hacia dónde miraba
+        needGyroInit = false;
+      }
+      camera.quaternion.copy(qYaw.setFromAxisAngle(yAxis, gyroOffset)).multiply(dq);
+    }
+  } else {
+    fwd.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
+    camera.lookAt(fwd);
+  }
+  renderer.render(scene, camera);
+});
+// ---------- Selector de archivo dentro del visor ----------
+// iOS no deja al WebView leer fotos de la app, así que el archivo se elige aquí.
+const picker = document.createElement('div');
+picker.style.cssText = 'position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:32px;box-sizing:border-box;text-align:center';
+const btnCss = 'display:block;width:100%;max-width:320px;box-sizing:border-box;padding:16px;border-radius:14px;font-size:17px;font-weight:600;overflow-wrap:anywhere;';
+picker.innerHTML =
+  '<label style="' + btnCss + 'background:#fff;color:#000">Elegir foto o video 360<input id="fi" type="file" accept="image/*,video/*" style="display:none"></label>' +
+  '<label style="' + btnCss + 'background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.35)">Audio aparte (opcional)<input id="fa" type="file" accept="audio/*" style="display:none"></label>' +
+  '<div id="an" style="font-size:14px;color:#aaa;max-width:320px;overflow-wrap:anywhere"></div>';
+document.body.appendChild(picker);
+let pickedAudio = null;
+$('fa').onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (f) { pickedAudio = URL.createObjectURL(f); $('an').textContent = 'Audio: ' + f.name; }
+};
+$('fi').onchange = (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  CFG.src = URL.createObjectURL(f);
+  CFG.type = /^video/.test(f.type) || /.(mp4|mov|m4v|webm)$/i.test(f.name) ? 'video' : 'image';
+  CFG.audioSrc = CFG.type === 'video' ? pickedAudio : null;
+  picker.remove();
+  say('Cargando…');
+  loadMedia();
+};
+if (CFG.src) { picker.remove(); loadMedia(); } else { say(''); }
+</script>
+</body>
+</html>
