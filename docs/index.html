@@ -288,7 +288,7 @@ function endPointer(e) {
   if (pts.size < 2) pinch = null;
   if (tap && pts.size === 0) {
     const moved = Math.hypot(e.clientX - tap.x, e.clientY - tap.y);
-    if (moved < 8 && Date.now() - tap.t < 300) bar.classList.toggle('hidden');
+    if (moved < 8 && Date.now() - tap.t < 300) { const h = bar.classList.toggle('hidden'); $('home').classList.toggle('hidden', h); }
     tap = null;
   }
 }
