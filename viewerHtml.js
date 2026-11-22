@@ -32,6 +32,7 @@ export function buildViewerHtml(cfg) {
 </head>
 <body>
 <div id="msg">Cargando…</div>
+<div id="vrline" class="hidden" style="position:fixed;top:0;bottom:0;left:50%;width:2px;margin-left:-1px;background:#333;pointer-events:none"></div>
 <div id="bar">
   <div id="seekRow" class="hidden">
     <button id="play">▶</button>
@@ -42,6 +43,7 @@ export function buildViewerHtml(cfg) {
   <button id="gyro">Giroscopio</button>
   <button id="fmt">Formato: Mono</button>
   <button id="reset">Centrar</button>
+  <button id="vr">Cardboard</button>
 </div>
 <script>window.__CFG = ${json};</script>
 <script type="module">
@@ -83,9 +85,9 @@ window.addEventListener('resize', () => {
 
 // ---------- Formatos (mono / estéreo) ----------
 const FORMATS = [
-  { label: 'Mono',         r: [1, 1],   o: [0, 0] },
-  { label: 'Arriba/abajo', r: [1, 0.5], o: [0, 0.5] }, // ojo izquierdo arriba
-  { label: 'Lado a lado',  r: [0.5, 1], o: [0, 0] },   // ojo izquierdo a la izquierda
+  { label: 'Mono',         r: [1, 1],   o: [0, 0],   o2: [0, 0] },
+  { label: 'Arriba/abajo', r: [1, 0.5], o: [0, 0.5], o2: [0, 0] }, // izquierdo arriba, derecho abajo
+  { label: 'Lado a lado',  r: [0.5, 1], o: [0, 0],   o2: [0.5, 0] }, // izquierdo a la izquierda
 ];
 let fmtIdx = 0;
 function applyFormat() {
@@ -278,6 +280,49 @@ function endPointer(e) {
 cv.addEventListener('pointerup', endPointer);
 cv.addEventListener('pointercancel', endPointer);
 
+
+// ---------- Modo Cardboard (pantalla dividida, una vista por ojo) ----------
+const vrBtn = $('vr'), vrLine = $('vrline');
+let vr = false, fovBeforeVr = 75, wasLandscape = null;
+vrBtn.onclick = () => {
+  vr = !vr;
+  vrBtn.classList.toggle('on', vr);
+  vrBtn.textContent = vr ? 'Salir de Cardboard' : 'Cardboard';
+  vrLine.classList.toggle('hidden', !vr);
+  const ttl = document.getElementById('ttl'); if (ttl) ttl.style.display = vr ? 'none' : '';
+  wasLandscape = null;
+  if (vr) {
+    fovBeforeVr = camera.fov;
+    camera.fov = 90;
+    setGyro(true);
+    bar.classList.add('hidden');
+    const home = document.getElementById('home'); if (home) home.classList.add('hidden');
+  } else {
+    camera.fov = fovBeforeVr;
+    camera.aspect = window.innerWidth / window.innerHeight;
+    say('');
+  }
+  camera.updateProjectionMatrix();
+};
+function renderFrame() {
+  if (!vr) { renderer.render(scene, camera); return; }
+  const w = window.innerWidth, h = window.innerHeight, f = FORMATS[fmtIdx];
+  const landscape = w > h;
+  if (landscape !== wasLandscape) { wasLandscape = landscape; say(landscape ? '' : 'Gira el teléfono en horizontal y ponlo en las gafas'); }
+  camera.aspect = (w / 2) / h;
+  camera.updateProjectionMatrix();
+  renderer.setScissorTest(true);
+  for (let eye = 0; eye < 2; eye++) {
+    if (mat.map) { const o = eye ? f.o2 : f.o; mat.map.offset.set(o[0], o[1]); }
+    renderer.setViewport(eye * w / 2, 0, w / 2, h);
+    renderer.setScissor(eye * w / 2, 0, w / 2, h);
+    renderer.render(scene, camera);
+  }
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, w, h);
+  if (mat.map) mat.map.offset.set(f.o[0], f.o[1]);
+}
+
 renderer.setAnimationLoop(() => {
   if (gyroOn) {
     if (motion) {
@@ -293,7 +338,7 @@ renderer.setAnimationLoop(() => {
     fwd.set(Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch));
     camera.lookAt(fwd);
   }
-  renderer.render(scene, camera);
+  renderFrame();
 });
 // ---------- Selector de archivo dentro del visor ----------
 // iOS no deja al WebView leer fotos de la app, así que el archivo se elige aquí.
