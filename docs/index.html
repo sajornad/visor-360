@@ -28,6 +28,8 @@
 </head>
 <body>
 <div id="msg">Cargando…</div>
+<button id="home" class="hidden" aria-label="Volver al inicio" style="position:fixed;top:calc(10px + env(safe-area-inset-top));left:12px;display:flex;align-items:center;gap:6px;padding:8px 14px;background:rgba(0,0,0,.55);border:1px solid rgba(255,255,255,.35);border-radius:20px;font-size:15px;font-weight:600;color:#fff;z-index:10"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11l9-8 9 8"/><path d="M5 10v10h5v-6h4v6h5V10"/></svg>Inicio</button>
+
 <div style="position:fixed;top:calc(12px + env(safe-area-inset-top));left:0;right:0;text-align:center;font-weight:700;font-size:17px;pointer-events:none">Visor 360</div>
 <div id="bar">
   <div id="seekRow" class="hidden">
@@ -321,6 +323,10 @@ picker.innerHTML =
   '<div id="an" style="font-size:14px;color:#aaa;max-width:320px;overflow-wrap:anywhere"></div>';
 document.body.appendChild(picker);
 let pickedAudio = null;
+$('home').onclick = () => {
+  try { if (video) video.pause(); if (audio) audio.pause(); } catch (e) {}
+  location.reload();
+};
 $('fa').onchange = (ev) => {
   const f = ev.target.files[0];
   if (f) { pickedAudio = URL.createObjectURL(f); $('an').textContent = 'Audio: ' + f.name; }
@@ -332,6 +338,7 @@ $('fi').onchange = (ev) => {
   CFG.type = /^video/.test(f.type) || /.(mp4|mov|m4v|webm)$/i.test(f.name) ? 'video' : 'image';
   CFG.audioSrc = CFG.type === 'video' ? pickedAudio : null;
   picker.remove();
+  $('home').classList.remove('hidden');
   say('Cargando…');
   loadMedia();
 };
