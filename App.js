@@ -6,7 +6,6 @@ import { StatusBar } from 'expo-status-bar';
 import { WebView } from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import * as DocumentPicker from 'expo-document-picker';
-import { File, Paths } from 'expo-file-system';
 import { DeviceMotion } from 'expo-sensors';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { buildViewerHtml } from './viewerHtml';
@@ -19,22 +18,21 @@ function guessType(name = '', mime = '') {
   return VIDEO_EXT.test(name) ? 'video' : 'image';
 }
 
-// El WebView solo puede leer archivos dentro de la carpeta de caché de la app.
-// Si el archivo elegido está en otro lado, se copia ahí.
+// Los archivos elegidos ya quedan en la caché de la app, así que se usan tal cual.
 function ensureInCache(uri) {
-  if (/^https?:/i.test(uri) || uri.startsWith(Paths.cache.uri)) return uri;
-  const src = new File(uri);
-  const dest = new File(Paths.cache, `m_${Date.now()}_${src.name || 'media'}`);
-  src.copy(dest);
-  return dest.uri;
+  return uri;
 }
 
-function writeViewer(cfg) {
-  const f = new File(Paths.cache, 'visor360.html');
-  if (f.exists) f.delete();
-  f.create();
-  f.write(buildViewerHtml(cfg));
-  return f.uri;
+// Arma la página del visor en memoria. baseUrl es la carpeta común del medio y del audio,
+// para que el WebView pueda leer esos archivos locales.
+function buildViewerPage(cfg) {
+  const dir = (u) => (u && /^file:/.test(u) ? u.slice(0, u.lastIndexOf('/') + 1) : null);
+  let base = dir(cfg.src);
+  const audioDir = dir(cfg.audioSrc);
+  if (base && audioDir) {
+    while (!audioDir.startsWith(base)) base = base.slice(0, base.slice(0, -1).lastIndexOf('/') + 1);
+  }
+  return { html: buildViewerHtml(cfg), baseUrl: base || 'https://unpkg.com/' };
 }
 
 export default function App() {
@@ -51,7 +49,7 @@ function Main() {
   const [audio, setAudio] = useState(null); // { uri, name }
   const [url, setUrl] = useState('');
   const [busy, setBusy] = useState(false);
-  const [viewer, setViewer] = useState(null); // { htmlUri, key }
+  const [viewer, setViewer] = useState(null); // { page, key }
 
   const run = async (fn) => {
     setBusy(true);
@@ -101,16 +99,16 @@ function Main() {
 
   const open = () => run(async () => {
     if (!media) return;
-    const htmlUri = writeViewer({
+    const page = buildViewerPage({
       src: media.uri,
       type: media.type,
       audioSrc: media.type === 'video' && audio ? audio.uri : null,
     });
-    setViewer({ htmlUri, key: Date.now() });
+    setViewer({ page, key: Date.now() });
   });
 
   if (viewer) {
-    return <Viewer key={viewer.key} htmlUri={viewer.htmlUri} onClose={() => setViewer(null)} />;
+    return <Viewer key={viewer.key} page={viewer.page} onClose={() => setViewer(null)} />;
   }
 
   return (
@@ -179,7 +177,7 @@ function Main() {
   );
 }
 
-function Viewer({ htmlUri, onClose }) {
+function Viewer({ page, onClose }) {
   const insets = useSafeAreaInsets();
   const web = useRef(null);
   const sub = useRef(null);
@@ -224,9 +222,9 @@ function Viewer({ htmlUri, onClose }) {
       <StatusBar hidden />
       <WebView
         ref={web}
-        source={{ uri: htmlUri }}
+        source={{ html: page.html, baseUrl: page.baseUrl }}
         originWhitelist={['*']}
-        allowingReadAccessToURL={Paths.cache.uri}
+        allowingReadAccessToURL={page.baseUrl}
         allowFileAccess
         allowFileAccessFromFileURLs
         allowUniversalAccessFromFileURLs
