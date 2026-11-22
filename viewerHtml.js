@@ -57,7 +57,9 @@ function post(m) { if (window.ReactNativeWebView) window.ReactNativeWebView.post
 const clamp = THREE.MathUtils.clamp;
 
 // ---------- Escena ----------
-const renderer = new THREE.WebGLRenderer({ antialias: false });
+let renderer;
+try { renderer = new THREE.WebGLRenderer({ antialias: false }); }
+catch (err) { say('Este navegador no puede mostrar 3D (WebGL): ' + err.message); throw err; }
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
